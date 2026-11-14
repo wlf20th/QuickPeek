@@ -8,7 +8,7 @@ internal sealed class Toast : Form
     private static Toast? _current;
     private readonly System.Windows.Forms.Timer _timer;
 
-    private Toast(string text)
+    private Toast(string text, bool nearTray, int durationMs)
     {
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
@@ -33,19 +33,30 @@ internal sealed class Toast : Form
         Controls.Add(lbl);
 
         var size = TextRenderer.MeasureText(text, lbl.Font);
-        int w = Math.Min(S(420), size.Width + S(28));
+        int w = Math.Min(S(560), size.Width + S(28));
         int h = Math.Max(S(34), size.Height + S(16));
         lbl.SetBounds(S(8), S(4), w - S(16), h - S(8));
 
-        var wa = Screen.FromPoint(Cursor.Position).WorkingArea;
-        int x = Cursor.Position.X + S(14);
-        int y = Cursor.Position.Y + S(22);
-        if (x + w > wa.Right) x = wa.Right - w - S(8);
-        if (y + h > wa.Bottom) y = Cursor.Position.Y - h - S(12);
+        int x, y;
+        if (nearTray)
+        {
+            // 启动提示贴着托盘区（右下角），不要盖在鼠标上
+            var wa = Screen.PrimaryScreen!.WorkingArea;
+            x = wa.Right - w - S(12);
+            y = wa.Bottom - h - S(14);
+        }
+        else
+        {
+            var wa = Screen.FromPoint(Cursor.Position).WorkingArea;
+            x = Cursor.Position.X + S(14);
+            y = Cursor.Position.Y + S(22);
+            if (x + w > wa.Right) x = wa.Right - w - S(8);
+            if (y + h > wa.Bottom) y = Cursor.Position.Y - h - S(12);
+        }
         SetBounds(x, y, w, h);
         Theme.RoundRegion(this, S(6));
 
-        _timer = new System.Windows.Forms.Timer { Interval = 1600 };
+        _timer = new System.Windows.Forms.Timer { Interval = Math.Max(800, durationMs) };
         _timer.Tick += (_, _) => Close();
     }
 
@@ -68,12 +79,17 @@ internal sealed class Toast : Form
         e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
     }
 
-    public static void Show(string text)
+    public static void Show(string text, int durationMs = 1600) => ShowCore(text, false, durationMs);
+
+    /// <summary>贴着右下角托盘区显示，用于启动提示（不要跟着鼠标、别挡住光标）。</summary>
+    public static void ShowNearTray(string text, int durationMs = 2600) => ShowCore(text, true, durationMs);
+
+    private static void ShowCore(string text, bool nearTray, int durationMs)
     {
         try
         {
             _current?.Close();
-            _current = new Toast(text);
+            _current = new Toast(text, nearTray, durationMs);
             _current.Show();
             _current._timer.Start();
         }

@@ -85,8 +85,24 @@ internal sealed class TrayContext : ApplicationContext
 
         Log.Write($"启动: 托盘就绪 · 鼠标触发={( _cfg.MouseTrigger ? "开" : "关")}");
 
-        // 不再弹启动气泡：Win11 会把 balloon 转成通知，标题/正文被截断且显示不了应用图标，
-        // 反而比只留托盘图标更碍眼。
+        // 启动提示用**自绘气泡**，不用托盘 ShowBalloonTip：
+        // Win11 会把 balloon 转成系统通知，标题被截断成"私密"、还显示不了应用图标。
+        // 开机自启（注册表里带 --tray）和 --silent 不弹，免得每次开机都打扰。
+        var argv = Environment.GetCommandLineArgs().Skip(1).ToArray();
+        if (!argv.Any(a => a is "--tray" or "--silent"))
+        {
+            // 延后 500ms：等消息循环真正跑起来，否则气泡画不出来也关不掉
+            var hint = new System.Windows.Forms.Timer { Interval = 500 };
+            hint.Tick += (_, _) =>
+            {
+                hint.Stop();
+                hint.Dispose();
+                Toast.ShowNearTray(
+                    $"QuickPeek 已启动 · {_cfg.HkPeek} 划词 · {_cfg.HkClip} 分析剪贴板 · Ctrl+Alt+S 设置",
+                    3000);
+            };
+            hint.Start();
+        }
 
         DispatchStartupArgs();
     }

@@ -22,7 +22,7 @@ internal static class Program
         using var mutex = new Mutex(true, @"Local\QuickPeek_DotNet_SingleInstance", out bool created);
         if (!created)
         {
-            MessageBox.Show("QuickPeek 已在运行，请查看托盘图标。", "QuickPeek",
+            MessageBox.Show("QuickPeek 已在托盘运行。\r\n\r\n划词：选中文字后按热键或直接拖选\r\n设置：在托盘图标上右键 → 设置…", "QuickPeek",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
