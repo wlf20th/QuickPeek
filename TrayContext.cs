@@ -360,7 +360,8 @@ internal sealed class TrayContext : ApplicationContext
                     _result ??= new ResultForm { RenderMarkdown = _cfg.RenderMarkdown };
                     _result.SetResult(
                         res.Content + $"\n\n—— {res.ElapsedMs / 1000.0:0.0}s · {_cfg.Model}",
-                        $"完成 · {res.ElapsedMs / 1000.0:0.0}s · {res.Content.Length} 字");
+                        $"完成 · {res.ElapsedMs / 1000.0:0.0}s · {res.Content.Length} 字",
+                        act.Name);
                     break;
             }
         }
@@ -386,7 +387,7 @@ internal sealed class TrayContext : ApplicationContext
     {
         Log.Write(message);
         _result ??= new ResultForm { RenderMarkdown = _cfg.RenderMarkdown };
-        _result.SetResult(message, "失败");
+        _result.SetResult(message, "失败", "错误");
     }
 
     private async Task ReplaceSelectionAsync(string content, string original)
