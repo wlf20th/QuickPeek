@@ -2,6 +2,7 @@
 // 用法：uiaprobe.exe [窗口句柄十六进制]
 using System.Text;
 using System.Windows.Automation;
+using System.Windows.Automation.Text;
 
 namespace uiaprobe;
 
@@ -34,6 +35,12 @@ internal static class Program
 
     private static int Main(string[] args)
     {
+        // --focus：从"当前焦点元素"往上找 TextPattern，看能不能低成本问到选区
+        if (args.Length >= 1 && args[0] == "--focus")
+        {
+            return FocusWalk();
+        }
+
         // --watch <ms>：轮询选区长度，用来测 WT 的 UIA 选区有多大的更新延迟
         if (args.Length >= 2 && args[0] == "--watch")
         {
@@ -77,6 +84,46 @@ internal static class Program
                 Console.WriteLine($"      TextPattern 读取失败: {ex.GetType().Name} {ex.Message}");
             }
         }
+        return 0;
+    }
+
+    private static int FocusWalk()
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        AutomationElement? el;
+        try { el = AutomationElement.FocusedElement; }
+        catch (Exception ex) { Console.WriteLine("FocusedElement 失败: " + ex.GetType().Name); return 1; }
+
+        Console.WriteLine($"焦点元素: {el.Current.ClassName} / {el.Current.ControlType.ProgrammaticName} / name={el.Current.Name}");
+        Console.WriteLine($"拿到焦点耗时 {sw.ElapsedMilliseconds}ms");
+
+        var walker = TreeWalker.ControlViewWalker;
+        for (int depth = 0; depth < 8 && el != null; depth++)
+        {
+            var t0 = sw.ElapsedMilliseconds;
+            bool hasTp = el.TryGetCurrentPattern(TextPattern.Pattern, out object pat);
+            string info;
+            if (hasTp)
+            {
+                var tp = (TextPattern)pat;
+                var sup = tp.SupportedTextSelection;
+                var sel = sup == SupportedTextSelection.None
+                    ? Array.Empty<TextPatternRange>()
+                    : tp.GetSelection();
+                string txt = sel.Length > 0 ? sel[0].GetText(-1) : "";
+                info = $"TextPattern=Y supported={sup} selRanges={sel.Length} len={txt.Length} |{txt.Replace("\r", "\\r").Replace("\n", "\\n")}|";
+            }
+            else
+            {
+                info = "TextPattern=N";
+            }
+            Console.WriteLine($"  [{depth}] {el.Current.ClassName,-28} {info}  (+{sw.ElapsedMilliseconds - t0}ms)");
+
+            try { el = walker.GetParent(el); }
+            catch { break; }
+        }
+
+        Console.WriteLine($"总耗时 {sw.ElapsedMilliseconds}ms");
         return 0;
     }
 

@@ -128,27 +128,31 @@ internal static class SelectionGrabber
         string proc = ForegroundProcessName();
         bool terminal = IsTerminalApp(proc);
 
-        // ---- 终端：先问"有没有选区"，再决定要不要发键 ----
-        // 终端里盲发 Ctrl+Shift+C 是有代价的：没有选区时终端会把它按 Ctrl+C 编码成 0x03，
-        // 正在跑的命令（llama-server、构建、批处理）当场被打断。反过来，有选区时它只复制。
-        // 所以先用 UIA 问一句，效果就和 cmd 自己的 Ctrl+C 一样：
-        //   有选中 → 直接拿走文字（一个键都不发，连剪贴板都不碰）
-        //   没选中 → 什么都不做
+        // ---- 先问一句"到底有没有选中文字"，再决定要不要发键 ----
+        // 为什么要问：
+        //  · 终端里没有选区时 Ctrl+Shift+C 会被编码成 0x03，直接打断前台命令；
+        //  · 普通程序里没有选区时 Ctrl+C 也不是"什么都没发生"——VS Code 复制整行、
+        //    某些编辑器复制当前段落，于是弹出一条内容无关的操作条；
+        //  · 两种情况都要白等 2.7 秒（等两轮剪贴板）才放弃。
         // 这段刻意放在"清空剪贴板"之前：能直接拿到文字时，用户的剪贴板一动都不该动。
+        var probe = SelectionProbe.Query(Native.GetForegroundWindow(), terminal);
+        bool noSelection = probe.State == SelState.None && probe.Authoritative;
+        Log.Write($"抓取: 选区探针 {probe.State}(可信={probe.Authoritative}) 进程={proc}");
+
+        if (noSelection)
+        {
+            Log.Write(terminal
+                ? $"抓取: 终端({proc})当前没有选中文字，不做任何动作"
+                : $"抓取: {proc} 当前没有选中内容（UIA 判定），不发键、不弹条");
+            return null;
+        }
+
         if (terminal)
         {
-            var (state, uiaText) = SelectionProbe.Query(Native.GetForegroundWindow());
-
-            if (state == SelState.Has && uiaText.Length > 0)
+            if (probe.State == SelState.Has && probe.Text.Length > 0)
             {
-                Log.Write($"抓取: 终端({proc})选区由 UIA 直接读取 {uiaText.Length} 字，未发送任何按键");
-                return new Selection(Clamp(uiaText), "");
-            }
-
-            if (state == SelState.None)
-            {
-                Log.Write($"抓取: 终端({proc})当前没有选中文字，不做任何动作");
-                return null;
+                Log.Write($"抓取: 终端({proc})选区由 UIA 直接读取 {probe.Text.Length} 字，未发送任何按键");
+                return new Selection(Clamp(probe.Text), "");
             }
 
             // 探不出来（该终端没有 UIA 文本接口）：鼠标触发一律不冒险，
@@ -201,14 +205,19 @@ internal static class SelectionGrabber
         {
             // 部分应用（WinUI 记事本等）第一次会吞掉按键——刚结束鼠标拖选时尤其明显，
             // 复制没落地就补发一次，比单纯延长超时更可靠。
-            got = ClipboardHelper.WaitForNewText(700, seqCleared, out text);
+            // 探针已经确认"确实有选区"时收紧超时：这种情况下复制要么很快落地，
+            // 要么就是被应用吞了，没必要一轮等 2 秒。
+            int first = probe.State == SelState.Has ? 900 : 700;
+            int second = probe.State == SelState.Has ? 900 : CopyTimeoutMs;
+
+            got = ClipboardHelper.WaitForNewText(first, seqCleared, out text);
             Phase("等待剪贴板(第一次)");
             if (!got)
             {
                 Log.Write("抓取: 首次复制未落地，补发一次");
                 uint seqBeforeRetry = Native.GetClipboardSequenceNumber();
                 Input.SendCombo(keys);
-                got = ClipboardHelper.WaitForNewText(CopyTimeoutMs, seqBeforeRetry, out text);
+                got = ClipboardHelper.WaitForNewText(second, seqBeforeRetry, out text);
                 Phase("等待剪贴板(补发)");
             }
         }
