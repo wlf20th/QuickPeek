@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>QuickPeek</AssemblyName>
+    <RootNamespace>QuickPeek</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <Version>0.5.0</Version>
+    <Company>QuickPeek</Company>
+    <Product>QuickPeek</Product>
+    <AssemblyTitle>QuickPeek 划词 AI 助手</AssemblyTitle>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 运行时从资源里按目标尺寸取帧（托盘在 150% DPI 下要 24px，不是 16px） -->
+    <EmbeddedResource Include="app.ico" LogicalName="QuickPeek.app.ico" />
+  </ItemGroup>
+
+</Project>

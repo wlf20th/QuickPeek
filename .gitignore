@@ -1,0 +1,23 @@
+# ---- .NET 构建产物 ----
+bin/
+obj/
+publish/
+publish_trim/
+*.user
+*.suo
+.vs/
+
+# ---- 本地配置与日志 ----
+# settings.json 里有 api_key，绝对不能提交
+settings.json
+qp.log
+qp.log.*
+
+# ---- tools/ 下脚本跑出来的临时截图 ----
+tools/*.png
+tools/*.jpg
+
+# ---- 系统杂项 ----
+Thumbs.db
+desktop.ini
+.DS_Store
