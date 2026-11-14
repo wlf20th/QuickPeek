@@ -21,3 +21,7 @@ tools/*.jpg
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# ---- tools/ 里的独立小工程的构建产物 ----
+tools/**/bin/
+tools/**/obj/

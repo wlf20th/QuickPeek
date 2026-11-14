@@ -121,10 +121,44 @@ internal static class SelectionGrabber
             if (auto.Length > 0)
             {
                 Log.Write($"抓取: 应用已自动复制({auto.Length} 字)，未发送任何按键");
-                if (auto.Length > MaxSel)
-                    auto = auto[..4000] + "\n\n……[中间内容已截断]……\n\n" + auto[^4000..];
-                return new Selection(auto, auto);
+                return new Selection(Clamp(auto), auto);
             }
+        }
+
+        string proc = ForegroundProcessName();
+        bool terminal = IsTerminalApp(proc);
+
+        // ---- 终端：先问"有没有选区"，再决定要不要发键 ----
+        // 终端里盲发 Ctrl+Shift+C 是有代价的：没有选区时终端会把它按 Ctrl+C 编码成 0x03，
+        // 正在跑的命令（llama-server、构建、批处理）当场被打断。反过来，有选区时它只复制。
+        // 所以先用 UIA 问一句，效果就和 cmd 自己的 Ctrl+C 一样：
+        //   有选中 → 直接拿走文字（一个键都不发，连剪贴板都不碰）
+        //   没选中 → 什么都不做
+        // 这段刻意放在"清空剪贴板"之前：能直接拿到文字时，用户的剪贴板一动都不该动。
+        if (terminal)
+        {
+            var (state, uiaText) = SelectionProbe.Query(Native.GetForegroundWindow());
+
+            if (state == SelState.Has && uiaText.Length > 0)
+            {
+                Log.Write($"抓取: 终端({proc})选区由 UIA 直接读取 {uiaText.Length} 字，未发送任何按键");
+                return new Selection(Clamp(uiaText), "");
+            }
+
+            if (state == SelState.None)
+            {
+                Log.Write($"抓取: 终端({proc})当前没有选中文字，不做任何动作");
+                return null;
+            }
+
+            // 探不出来（该终端没有 UIA 文本接口）：鼠标触发一律不冒险，
+            // 热键是用户明确要求"复制当前选区"，才按老路子发一次键
+            if (!fromHotkey)
+            {
+                Log.Write($"抓取: 终端({proc})选区状态未知，鼠标触发不发键（会把 Ctrl+Shift+C 打成 Ctrl+C）");
+                return null;
+            }
+            Log.Write($"抓取: 终端({proc})选区状态未知，热键触发，按老路子发一次复制键");
         }
 
         var backup = ClipboardHelper.GetText();
@@ -144,20 +178,6 @@ internal static class SelectionGrabber
         Input.ReleaseModifiers();
         Thread.Sleep(15);
         Phase("等修饰键");
-
-        string proc = ForegroundProcessName();
-        bool terminal = IsTerminalApp(proc);
-
-        // 鼠标触发 + 终端：直接放弃。终端在"没有选区"时收到 Ctrl+Shift+C 会把它
-        // 编码成 Ctrl+C，打断前台命令；而鼠标误触发（拖窗口、点一下、拖标题栏）
-        // 恰恰就是没有选区的情况，风险远大于收益。终端里划词请用 Alt+Q。
-        if (terminal && !fromHotkey)
-        {
-            Log.Write($"抓取: 前台是终端({proc})，跳过鼠标触发 —— " +
-                      "没选区时 Ctrl+Shift+C 会被当成 Ctrl+C 打断正在跑的命令");
-            if (backup != "") ClipboardHelper.SetText(backup);
-            return null;
-        }
 
         var keys = MatchCopyKeys(cfg);
         // SSH/串口客户端和终端一样：按键会被转发到远端，补发一次等于再捅一刀
@@ -224,15 +244,20 @@ internal static class SelectionGrabber
             return null;
         }
 
-        if (text.Length > MaxSel)
-        {
-            string head = text[..4000];
-            string tail = text[^4000..];
-            text = head + "\n\n……[中间内容已截断]……\n\n" + tail;
-        }
+        text = Clamp(text);
 
         Log.Write($"抓取成功: {text.Length} 字, 耗时 {sw.ElapsedMilliseconds}ms");
         return new Selection(text, backup);
+    }
+
+    /// <summary>
+    /// 超长选区截断：保留头尾各 4000 字，中间用一行标记代替。
+    /// 头尾都留是因为日志的"结论"常常在末尾（异常栈、最后的报错）。
+    /// </summary>
+    private static string Clamp(string text)
+    {
+        if (text.Length <= MaxSel) return text;
+        return text[..4000] + "\n\n……[中间内容已截断]……\n\n" + text[^4000..];
     }
 
     /// <summary>等 Ctrl/Alt/Shift/Win 真正松手，最多 timeoutMs。</summary>

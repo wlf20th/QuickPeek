@@ -32,7 +32,6 @@ internal sealed class TrayContext : ApplicationContext
     private int _barHiddenTick;
     private string _pendingText = "";
     private Point? _lastBarPos;
-    private bool _terminalHintShown;
     private uint _seqAtMouseDown;
     private bool _exiting;
 
@@ -282,24 +281,11 @@ internal sealed class TrayContext : ApplicationContext
         _capturing = true;
         try
         {
-            // 终端里鼠标触发一律不发按键：没选区时 Ctrl+Shift+C 会被终端编码成
-            // Ctrl+C，直接把正在跑的命令（llama-server、构建、批处理）打断。
-            // 这里在 UI 线程先挡一次，顺带提示用户改用热键。
-            if (!fromHotkey && SelectionGrabber.IsTerminalForeground())
-            {
-                Log.Write("抓取: 前台是终端，忽略鼠标触发（要抓终端里的选区请按热键）");
-                if (!_terminalHintShown)
-                {
-                    _terminalHintShown = true;
-                    Toast.Show($"终端里请先选中文字再按 {_cfg.HkPeek}（自动复制会打断命令）");
-                }
-                if (_bar?.Visible ?? false) _bar!.Hide();
-                return;
-            }
-
             // 抓取在独立 STA 线程跑，UI 线程保持响应（否则全局鼠标钩子会把整个系统拖卡）
             // 鼠标触发时带上"按下瞬间的剪贴板序列号"，用来识别应用是否已经自动复制了选区；
             // 热键触发没有这个前状态，传 0 跳过该快路径。
+            // 终端里不再在这里一刀切地挡掉：SelectionGrabber 会先用 UIA 问"有没有选区"，
+            // 有就抓、没有就什么都不做 —— 和 cmd 自己 Ctrl+C 的语义一致。
             var task = SelectionGrabber.CaptureAsync(_cfg, fromHotkey, fromHotkey ? 0u : _seqAtMouseDown);
             var finished = await Task.WhenAny(task, Task.Delay(CaptureDeadlineMs));
             if (finished != task)

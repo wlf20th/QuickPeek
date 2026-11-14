@@ -10,13 +10,27 @@
     <RootNamespace>QuickPeek</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>app.ico</ApplicationIcon>
-    <Version>0.5.0</Version>
+    <Version>0.6.0</Version>
     <Company>QuickPeek</Company>
     <Product>QuickPeek</Product>
     <AssemblyTitle>QuickPeek 划词 AI 助手</AssemblyTitle>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- tools/ 是探针脚本和独立小工程（uiaprobe），不属于主程序 -->
+    <Compile Remove="tools/**" />
+    <EmbeddedResource Remove="tools/**" />
+    <None Remove="tools/**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 只用到 System.Windows.Automation（UIAutomationClient）来读终端选区。
+         它属于 WindowsDesktop 的 WPF profile，必须显式引；代价是整套 WPF 会被拖进
+         发布产物（不压缩 137MB），所以发布时加 EnableCompressionInSingleFile 压回 62MB。 -->
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- 运行时从资源里按目标尺寸取帧（托盘在 150% DPI 下要 24px，不是 16px） -->
