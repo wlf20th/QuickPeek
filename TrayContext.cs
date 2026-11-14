@@ -36,6 +36,10 @@ internal sealed class TrayContext : ApplicationContext
     private uint _seqAtMouseDown;
     private bool _exiting;
 
+    /// <summary>只为拿到一个归属 UI 线程的窗口句柄，好把"外部激活"的请求编组回来。</summary>
+    private readonly Control _invoker = new();
+    private EventWaitHandle? _activate;
+
     public TrayContext()
     {
         _cfg = ConfigStore.Load();
@@ -104,7 +108,67 @@ internal sealed class TrayContext : ApplicationContext
             hint.Start();
         }
 
+        SetupActivateListener();
         DispatchStartupArgs();
+    }
+
+    /// <summary>
+    /// 监听"再双击一次 exe"的请求：第二次启动的进程只发一个信号就退出，
+    /// 这里收到后把托盘菜单就地弹出来（比弹一句"已在运行"有用得多）。
+    /// </summary>
+    private void SetupActivateListener()
+    {
+        try
+        {
+            _invoker.CreateControl();   // 必须有句柄，BeginInvoke 才能编组到 UI 线程
+            _activate = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\QuickPeek_Activate");
+
+            var th = new Thread(() =>
+            {
+                while (true)
+                {
+                    bool got;
+                    try
+                    {
+                        // 退出时事件会被 Dispose，这里必须接住，否则后台线程异常会带崩进程
+                        got = _activate.WaitOne();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        break;
+                    }
+                    catch (Exception)
+                    {
+                        break;
+                    }
+
+                    if (!got) break;
+                    try
+                    {
+                        _invoker.BeginInvoke(new Action(() =>
+                        {
+                            if (_exiting) return;
+                            RefreshMenu();
+                            _menu.Show(Cursor.Position);
+                            Log.Write("收到二次启动请求，已弹出托盘菜单");
+                        }));
+                    }
+                    catch
+                    {
+                        // 窗口已销毁，忽略
+                    }
+                }
+            })
+            {
+                IsBackground = true,
+                Name = "QuickPeek.Activate"
+            };
+            th.Start();
+        }
+        catch (Exception ex)
+        {
+            Log.Write($"⚠️ 激活监听创建失败: {ex.Message}");
+        }
     }
 
     // ---------------- 托盘菜单 ----------------
@@ -562,6 +626,8 @@ internal sealed class TrayContext : ApplicationContext
         _mouse.Dispose();
         _hotkeys.Dispose();
         _llm.Dispose();
+        try { _activate?.Dispose(); } catch { }
+        try { _invoker.Dispose(); } catch { }
         ExitThread();
     }
 

@@ -41,9 +41,14 @@ internal sealed class Toast : Form
         if (nearTray)
         {
             // 启动提示贴着托盘区（右下角），不要盖在鼠标上
-            var wa = Screen.PrimaryScreen!.WorkingArea;
+            var scr = Screen.PrimaryScreen!;
+            var wa = scr.WorkingArea;
+            int bottom = wa.Bottom;
+            // 任务栏设成自动隐藏时，工作区就是整屏，气泡会贴到屏幕最下沿、
+            // 而且任务栏一弹出来就把它盖住。这里往上让开一段。
+            if (wa.Bottom >= scr.Bounds.Bottom) bottom -= S(64);
             x = wa.Right - w - S(12);
-            y = wa.Bottom - h - S(14);
+            y = bottom - h - S(14);
         }
         else
         {
