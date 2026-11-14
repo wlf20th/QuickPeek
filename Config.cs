@@ -22,7 +22,10 @@ public sealed class AppRule
 public sealed class AppConfig
 {
     [JsonPropertyName("api_base")] public string ApiBase { get; set; } = "http://127.0.0.1:8080/v1";
+    /// <summary>运行时用的明文，永远不写进磁盘。</summary>
     [JsonPropertyName("api_key")] public string ApiKey { get; set; } = "";
+    /// <summary>磁盘上的密文（DPAPI，绑定当前 Windows 用户）。</summary>
+    [JsonPropertyName("api_key_enc")] public string ApiKeyEnc { get; set; } = "";
     [JsonPropertyName("model")] public string Model { get; set; } = "LFM2.5-24B-A2B-QAD-Q4_0.gguf";
     [JsonPropertyName("timeout_sec")] public int TimeoutSec { get; set; } = 180;
     [JsonPropertyName("temperature")] public double Temperature { get; set; } = 0.3;
@@ -132,6 +135,25 @@ public static class ConfigStore
             foreach (var a in cfg.Actions)
                 if (string.IsNullOrWhiteSpace(a.Mode)) a.Mode = "popup";
 
+            // API Key：磁盘上只认密文。
+            //  · api_key_enc 有值 → 解出来当明文用
+            //  · 只有旧的明文 api_key → 解不出来也没关系，立刻加密落盘（迁移）
+            //  · 解不开（换了用户/机器）→ 当空处理，日志提示重填，不让程序启动就崩
+            if (!string.IsNullOrEmpty(cfg.ApiKeyEnc))
+            {
+                if (!SecretStore.TryUnprotect(cfg.ApiKeyEnc, out var plain))
+                {
+                    Log.Write("⚠️ settings.json 里的 API Key 解不开（配置来自别的用户或机器？）—— 请在设置里重新填写");
+                    plain = "";
+                }
+                cfg.ApiKey = plain;
+            }
+            else if (!string.IsNullOrEmpty(cfg.ApiKey))
+            {
+                Log.Write("迁移: settings.json 里是明文 API Key，已加密保存（api_key 清空，改写 api_key_enc）");
+                Save(cfg);
+            }
+
             return cfg;
         }
         catch (Exception ex)
@@ -145,7 +167,7 @@ public static class ConfigStore
     {
         try
         {
-            var json = JsonSerializer.Serialize(cfg, JsonOpts);
+            var json = JsonSerializer.Serialize(ForDisk(cfg), JsonOpts);
             var tmp = FilePath + ".tmp";
             File.WriteAllText(tmp, json, new System.Text.UTF8Encoding(false));
             File.Move(tmp, FilePath, overwrite: true);
@@ -154,5 +176,17 @@ public static class ConfigStore
         {
             Log.Write($"⚠️ 保存 settings.json 失败: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// 落盘用的副本：把明文 API Key 换成 DPAPI 密文，并清空 api_key 字段。
+    /// 内存里的 cfg 保持明文（客户端请求要用），磁盘上永远见不到 key。
+    /// </summary>
+    private static AppConfig ForDisk(AppConfig cfg)
+    {
+        var copy = cfg.Clone();
+        copy.ApiKeyEnc = SecretStore.Protect(cfg.ApiKey);
+        copy.ApiKey = "";
+        return copy;
     }
 }

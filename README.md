@@ -90,6 +90,20 @@ Win11 会把 balloon 转成系统通知，标题被截断成"私密"这种莫名
 控件里存的是渲染后的样子 —— 表格会变成用 `─` 字符画的线、列表变成 `•`、缩进是控件属性，
 反读出来写进 `.md` 就是一堆垃圾。所以 `ResultForm` 单存一份 `_raw`，渲染只影响显示。
 
+## API Key 怎么存
+
+`settings.json` 里**不会出现明文 key**：
+
+- 磁盘上只有一个 `api_key_enc` 字段，内容是 `dpapi:v1:<base64>`；
+- 加密用 Windows **DPAPI**（`CryptProtectData`，CurrentUser 作用域），密文绑定当前 Windows 用户，
+  拷到别的机器或别的账户上解不开；
+- `api_key` 字段保留但恒为空 —— 这样 AHK 版读同一个文件时不会拿到一串解不开的乱码；
+- 设置界面里输入框默认是掩码，右边有「显示/隐藏」按钮；
+- 旧的明文 `api_key` 会在启动时自动迁移：读出 → 加密写回 → 清空明文字段，日志里留一行 `迁移: ...`；
+- 解不开时（换了机器/用户）当空值处理，日志提示重填，不会带着坏 key 去请求。
+
+只用两个 `crypt32` 导出函数，没有引 NuGet 包，也不影响单文件体积。
+
 ## 结果窗的 Markdown 渲染
 
 模型基本都在回 Markdown，纯文本贴进 TextBox 会连 `**`、`|` 一起显示。现在按 Markdown 排版：
@@ -201,6 +215,7 @@ Config.cs             Log.cs              settings.json 读写、日志
 Native.cs             Input.cs            P/Invoke、组合键解析与按键注入
 HotkeyManager.cs      MouseWatcher.cs     全局热键、全局鼠标钩子
 ClipboardHelper.cs    SelectionGrabber.cs 剪贴板重试、划词抓取（独立 STA 线程）
+SecretStore.cs                            API Key 的 DPAPI 加解密
 SelectionProbe.cs                         UIA 探针：终端到底有没有选中文字
 LlmClient.cs                              /chat/completions 客户端
 ActionBarForm.cs      ResultForm.cs       操作条、结果窗

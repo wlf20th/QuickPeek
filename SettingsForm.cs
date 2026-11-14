@@ -394,7 +394,19 @@ internal sealed class SettingsForm : Form
         _apiBase = Field(p, _work.ApiBase, 78, 400);
 
         FieldLabel(p, "API Key", 112);
-        _apiKey = Field(p, _work.ApiKey, 112, 400);
+        _apiKey = Field(p, _work.ApiKey, 112, 340);
+        // 默认遮起来：截图、录屏、旁边有人时都不会把 key 露出去
+        _apiKey.UseSystemPasswordChar = true;
+        var showKey = Theme.Button("显示", S(56), S(26));
+        showKey.Location = new Point(S(CtrlX + 348), S(111));
+        showKey.Click += (_, _) =>
+        {
+            _apiKey.UseSystemPasswordChar = !_apiKey.UseSystemPasswordChar;
+            showKey.Text = _apiKey.UseSystemPasswordChar ? "显示" : "隐藏";
+            _apiKey.Focus();
+            _apiKey.SelectionStart = _apiKey.Text.Length;
+        };
+        p.Controls.Add(showKey);
 
         FieldLabel(p, "模型名", 146);
         _model = Field(p, _work.Model, 146, 400);
@@ -431,7 +443,8 @@ internal sealed class SettingsForm : Form
         p.Controls.Add(new Label
         {
             Text = "提示：服务地址要带上 /v1（实际请求 <地址>/chat/completions）。\n" +
-                   "本机直连会绕过系统代理，等价 AHK 版的 curl --noproxy \"*\"。",
+                   "本机直连会绕过系统代理，等价 AHK 版的 curl --noproxy \"*\"。\n" +
+                   "API Key 用 Windows DPAPI 加密后存进 settings.json，只有当前 Windows 用户能解开。",
             AutoSize = true,
             Location = new Point(0, S(378)),
             ForeColor = Theme.TextDim,

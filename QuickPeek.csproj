@@ -10,7 +10,7 @@
     <RootNamespace>QuickPeek</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>app.ico</ApplicationIcon>
-    <Version>0.6.0</Version>
+    <Version>0.6.1</Version>
     <Company>QuickPeek</Company>
     <Product>QuickPeek</Product>
     <AssemblyTitle>QuickPeek 划词 AI 助手</AssemblyTitle>
