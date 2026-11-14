@@ -19,6 +19,12 @@ internal static class Native
     public const uint MOD_WIN = 0x0008;
     public const uint MOD_NOREPEAT = 0x4000;
 
+    // ---- 剪贴板序列号 ----
+    // 每次剪贴板内容被改写，这个数字都会 +1。它不碰 OLE、不读数据、不会因为
+    // 剪贴板被别的程序占用而失败，所以判断"复制有没有落地"比轮询 GetText 可靠得多。
+    [DllImport("user32.dll")]
+    public static extern uint GetClipboardSequenceNumber();
+
     // ---- 鼠标钩子 ----
     public const int WH_MOUSE_LL = 14;
 

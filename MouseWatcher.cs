@@ -15,6 +15,7 @@ internal sealed class MouseWatcher : IDisposable
     private int _lastUpTick;
     private bool _downOnSelf;
     private bool _downOnTitleBar;
+    private uint _clipSeqAtDown;
 
     public MouseWatcher()
     {
@@ -22,6 +23,13 @@ internal sealed class MouseWatcher : IDisposable
     }
 
     public bool Enabled { get; set; }
+
+    /// <summary>
+    /// 鼠标按下瞬间的剪贴板序列号。
+    /// 有些程序（终端、SSH 客户端）是"选中即复制"：拖选松手时自己就把内容写进剪贴板了，
+    /// 这时候我们一个按键都不该发 —— 既拿到了文本，也不会有按键透传打断命令的风险。
+    /// </summary>
+    public uint ClipSeqAtDown => _clipSeqAtDown;
 
     /// <summary>外部可以加额外抑制条件（例如正在请求中）。</summary>
     public Func<bool>? AlsoSuppress { get; set; }
@@ -63,6 +71,10 @@ internal sealed class MouseWatcher : IDisposable
                     // 在终端里那一下会发 Ctrl+Shift+C，没有选区时被当成 Ctrl+C，
                     // 直接把正在跑的命令（比如 llama-server）打断。
                     _downOnTitleBar = IsTitleBarAt(data.pt);
+
+                    // 记下按下瞬间的剪贴板序列号：松手后如果这个数字变了，
+                    // 说明应用自己把选中内容复制进去了（选中即复制），不需要我们发键
+                    _clipSeqAtDown = Native.GetClipboardSequenceNumber();
                 }
                 else if (msg == Native.WM_LBUTTONUP)
                 {

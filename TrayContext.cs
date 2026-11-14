@@ -33,6 +33,7 @@ internal sealed class TrayContext : ApplicationContext
     private string _pendingText = "";
     private Point? _lastBarPos;
     private bool _terminalHintShown;
+    private uint _seqAtMouseDown;
     private bool _exiting;
 
     public TrayContext()
@@ -61,6 +62,9 @@ internal sealed class TrayContext : ApplicationContext
 
         _mouse.DragDetected += () =>
         {
+            // 按下时的剪贴板序列号要在这里就存下来：延时器一跑，
+            // _mouse 里那个字段可能已经被下一次点击覆盖了
+            _seqAtMouseDown = _mouse.ClipSeqAtDown;
             _defer.Stop();
             _defer.Start();
         };
@@ -214,7 +218,9 @@ internal sealed class TrayContext : ApplicationContext
             }
 
             // 抓取在独立 STA 线程跑，UI 线程保持响应（否则全局鼠标钩子会把整个系统拖卡）
-            var task = SelectionGrabber.CaptureAsync(_cfg, fromHotkey);
+            // 鼠标触发时带上"按下瞬间的剪贴板序列号"，用来识别应用是否已经自动复制了选区；
+            // 热键触发没有这个前状态，传 0 跳过该快路径。
+            var task = SelectionGrabber.CaptureAsync(_cfg, fromHotkey, fromHotkey ? 0u : _seqAtMouseDown);
             var finished = await Task.WhenAny(task, Task.Delay(CaptureDeadlineMs));
             if (finished != task)
             {

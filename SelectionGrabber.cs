@@ -40,18 +40,39 @@ internal static class SelectionGrabber
     public static bool IsTerminalForeground() => IsTerminalApp(ForegroundProcessName());
 
     /// <summary>
+    /// 第三方 SSH / 串口客户端：键盘输入会被原样转发到远端，盲发按键同样有打断命令的风险。
+    /// 它们通常"选中即复制"，所以优先走自动复制快路径；真要发键也只发一次、不补发。
+    /// 注意不能加进 TerminalHosts —— 那会让鼠标触发被整体跳过，反而没有操作条了。
+    /// </summary>
+    private static readonly string[] PassthroughHosts =
+    {
+        "nyaterm", "finalshell", "xshell", "xshell6", "xftp", "securecrt", "securecrt64",
+        "mobaxterm", "putty", "puttytel", "winterm", "termius", "electerm", "royalts",
+        "juicessh", "solarputty", "bitvise"
+    };
+
+    public static bool IsKeyboardPassthrough(string proc)
+    {
+        if (string.IsNullOrEmpty(proc)) return false;
+        string p = proc.ToLowerInvariant();
+        if (p.EndsWith(".exe")) p = p[..^4];
+        foreach (var t in PassthroughHosts) if (p == t) return true;
+        return p.Contains("ssh") || p.Contains("term");
+    }
+
+    /// <summary>
     /// 抓取放到独立的 STA 线程执行。
     /// 关键：全局鼠标钩子装在 UI 线程上，若在 UI 线程里同步等剪贴板（最多 2.7s），
     /// 钩子回调会被拖住，整个系统的鼠标输入都会一顿一顿。
     /// </summary>
-    public static Task<Selection?> CaptureAsync(AppConfig cfg, bool fromHotkey)
+    public static Task<Selection?> CaptureAsync(AppConfig cfg, bool fromHotkey, uint seqAtMouseDown = 0)
     {
         var tcs = new TaskCompletionSource<Selection?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var th = new Thread(() =>
         {
             try
             {
-                tcs.TrySetResult(CaptureCore(cfg, fromHotkey));
+                tcs.TrySetResult(CaptureCore(cfg, fromHotkey, seqAtMouseDown));
             }
             catch (Exception ex)
             {
@@ -68,7 +89,7 @@ internal static class SelectionGrabber
         return tcs.Task;
     }
 
-    public static Selection? CaptureCore(AppConfig cfg, bool fromHotkey)
+    public static Selection? CaptureCore(AppConfig cfg, bool fromHotkey, uint seqAtMouseDown = 0)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var trail = new List<string>();
@@ -76,7 +97,7 @@ internal static class SelectionGrabber
 
         try
         {
-            return CaptureBody(cfg, fromHotkey, sw, Phase);
+            return CaptureBody(cfg, fromHotkey, seqAtMouseDown, sw, Phase);
         }
         finally
         {
@@ -86,14 +107,34 @@ internal static class SelectionGrabber
         }
     }
 
-    private static Selection? CaptureBody(AppConfig cfg, bool fromHotkey,
+    private static Selection? CaptureBody(AppConfig cfg, bool fromHotkey, uint seqAtMouseDown,
         System.Diagnostics.Stopwatch sw, Action<string> Phase)
     {
+        // ---- 快路径：应用"选中即复制" ----
+        // 很多终端/SSH 客户端（FinalShell 系、PuTTY、MobaXterm…）拖选松手就自己写剪贴板了。
+        // 这种情况我们一个键都不该发：既拿得到文本，也没有按键透传出去打断命令的风险。
+        // 必须在清空剪贴板之前判断，否则会把人家刚复制的内容清掉。
+        if (seqAtMouseDown != 0 && Native.GetClipboardSequenceNumber() != seqAtMouseDown)
+        {
+            string auto = ClipboardHelper.GetText().Trim(' ', '\t', '\r', '\n');
+            Phase("读取自动复制");
+            if (auto.Length > 0)
+            {
+                Log.Write($"抓取: 应用已自动复制({auto.Length} 字)，未发送任何按键");
+                if (auto.Length > MaxSel)
+                    auto = auto[..4000] + "\n\n……[中间内容已截断]……\n\n" + auto[^4000..];
+                return new Selection(auto, auto);
+            }
+        }
+
         var backup = ClipboardHelper.GetText();
         Phase("读取备份");
         if (!ClipboardHelper.SetText(""))
             return null;
         Phase("清空剪贴板");
+
+        // 记住"已清空"这个状态对应的序列号，后面用它判断复制有没有落地
+        uint seqCleared = Native.GetClipboardSequenceNumber();
 
         // 关键：热键触发时用户手还没松开。若此刻 Alt 仍按着，
         // 注入的 Ctrl+C 会被目标程序当作 Ctrl+Alt+C，复制直接失效。
@@ -119,8 +160,10 @@ internal static class SelectionGrabber
         }
 
         var keys = MatchCopyKeys(cfg);
+        // SSH/串口客户端和终端一样：按键会被转发到远端，补发一次等于再捅一刀
+        bool passthrough = terminal || IsKeyboardPassthrough(proc);
         Log.Write($"抓取: 前台进程={proc}, 使用按键={keys}" +
-                  (terminal ? "（终端：只发一次，不补发）" : ""));
+                  (passthrough ? "（按键会转发到远端：只发一次，不补发）" : ""));
 
         Input.SendCombo(keys);
         Phase("发送复制键");
@@ -128,33 +171,47 @@ internal static class SelectionGrabber
         bool got;
         string text;
 
-        if (terminal)
+        if (passthrough)
         {
-            // 终端里绝不补发：第二次同样会在没选区时透传成 Ctrl+C
-            got = ClipboardHelper.WaitForText(CopyTimeoutMs, out text);
-            Phase("等待剪贴板(终端)");
+            // 绝不补发：第二次同样可能被透传成 Ctrl+C
+            got = ClipboardHelper.WaitForNewText(CopyTimeoutMs, seqCleared, out text);
+            Phase("等待剪贴板(只有一次机会)");
         }
         else
         {
             // 部分应用（WinUI 记事本等）第一次会吞掉按键——刚结束鼠标拖选时尤其明显，
             // 复制没落地就补发一次，比单纯延长超时更可靠。
-            got = ClipboardHelper.WaitForText(700, out text);
+            got = ClipboardHelper.WaitForNewText(700, seqCleared, out text);
             Phase("等待剪贴板(第一次)");
             if (!got)
             {
                 Log.Write("抓取: 首次复制未落地，补发一次");
+                uint seqBeforeRetry = Native.GetClipboardSequenceNumber();
                 Input.SendCombo(keys);
-                got = ClipboardHelper.WaitForText(CopyTimeoutMs, out text);
+                got = ClipboardHelper.WaitForNewText(CopyTimeoutMs, seqBeforeRetry, out text);
                 Phase("等待剪贴板(补发)");
             }
         }
 
         if (!got)
         {
+            // 放弃之前再看一眼：Java 写的终端/SSH 客户端可能刚好在超时之后才渲染完，
+            // 这时剪贴板里其实已经有内容了。以前只把长度写进日志就把内容丢了，
+            // 表现就是"明明复制到了却不弹操作条"。
+            string late = ClipboardHelper.GetText().Trim(' ', '\t', '\r', '\n');
             Log.Write($"抓取: 等待剪贴板超时（前台进程={ForegroundProcessName()}，" +
-                      $"剪贴板长度={ClipboardHelper.GetText().Length}，耗时 {sw.ElapsedMilliseconds}ms）");
-            if (backup != "") ClipboardHelper.SetText(backup);
-            return null;
+                      $"剪贴板长度={late.Length}，序列号 {seqCleared}→{Native.GetClipboardSequenceNumber()}，" +
+                      $"耗时 {sw.ElapsedMilliseconds}ms）");
+
+            if (late.Length == 0)
+            {
+                if (backup != "") ClipboardHelper.SetText(backup);
+                return null;
+            }
+
+            Log.Write($"抓取: 超时后拿到 {late.Length} 字，直接采用");
+            text = late;
+            got = true;
         }
 
         if (backup != "") ClipboardHelper.SetText(backup);

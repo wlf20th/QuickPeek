@@ -44,6 +44,38 @@ internal static class ClipboardHelper
         return false;
     }
 
+    /// <summary>
+    /// 等剪贴板内容真正换成新的一段文本。
+    /// 判断依据是序列号变化（OLE 之外的开销，永远不会因为别的程序占用而失败），
+    /// 变了以后才去读文本。Java 写的终端（如第三方 SSH 客户端）在响应剪贴板请求时
+    /// 会慢半秒以上，直接轮询 GetText 可能一路异常到底、最后才读到 —— 用序列号就不会漏。
+    /// </summary>
+    public static bool WaitForNewText(int timeoutMs, uint sinceSeq, out string text)
+    {
+        text = "";
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < timeoutMs)
+        {
+            if (Native.GetClipboardSequenceNumber() != sinceSeq)
+            {
+                // 序列号变了：内容已经换过，此时再读文本，给它留点渲染时间
+                for (int i = 0; i < 6; i++)
+                {
+                    var t = GetText();
+                    if (!string.IsNullOrEmpty(t))
+                    {
+                        text = t;
+                        return true;
+                    }
+                    Thread.Sleep(20);
+                }
+                // 变了但还没读到（所有者还没渲染完），继续轮询
+            }
+            Thread.Sleep(15);
+        }
+        return false;
+    }
+
     /// <summary>等待剪贴板出现文本，返回是否等到。</summary>
     public static bool WaitForText(int timeoutMs, out string text)
     {
