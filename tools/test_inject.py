@@ -8,8 +8,9 @@ try:
 except Exception:
     pass
 
-EXE = r"C:\Users\Lianfa\WorkBuddy\2026-11-14-13-37-57\QuickPeekCS\bin\Debug\net8.0-windows\QuickPeek.exe"
-ENV = dict(os.environ, DOTNET_ROOT=r"C:\Users\Lianfa\.dotnet")
+HERE = os.path.dirname(os.path.abspath(__file__))
+EXE = os.environ.get("QP_EXE") or os.path.join(HERE, "..", "publish", "QuickPeek.exe")
+ENV = dict(os.environ, DOTNET_ROOT=os.path.expanduser(r"~\.dotnet"))
 TEXT = "selected by notepad 98765"
 
 

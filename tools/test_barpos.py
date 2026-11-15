@@ -4,6 +4,7 @@
 所以设置完必须用 GetCursorPos 回读确认，再以回读值作为判定基准。
 """
 import ctypes
+import os
 import subprocess
 import time
 
@@ -13,7 +14,8 @@ try:
 except Exception:
     pass
 
-EXE = r"C:\Users\Lianfa\WorkBuddy\2026-11-14-13-37-57\QuickPeekCS\bin\Debug\net8.0-windows\QuickPeek.exe"
+HERE = os.path.dirname(os.path.abspath(__file__))
+EXE = os.environ.get("QP_EXE") or os.path.join(HERE, "..", "publish", "QuickPeek.exe")
 
 
 class RECT(ctypes.Structure):

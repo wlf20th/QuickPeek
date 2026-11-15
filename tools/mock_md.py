@@ -45,7 +45,7 @@ com.zaxxer.hikari.pool.HikariPool$PoolEntryCreator
 
 SPECIAL = r"""## 转义测试
 
-路径：`C:////Users////Lianfa////.dotnet//dotnet.exe`，反斜杠两个：\\
+路径：`C:////Users////you////.dotnet//dotnet.exe`，反斜杠两个：\\
 
 花括号 `{ config: { a: 1 } }`，美元符 $HOME，尖括号 <div class="x">&nbsp;</div>
 

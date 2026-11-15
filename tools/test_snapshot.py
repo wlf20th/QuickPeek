@@ -13,10 +13,12 @@ import time
 import win32clipboard as cb
 import win32con
 
-EXE = os.environ.get("QP_EXE") or r"D:\workfile\git\QuickPeek\bin\Debug\net8.0-windows\QuickPeek.exe"
-LOG = os.environ.get("QP_LOG") or r"D:\workfile\git\QuickPeek\bin\Debug\net8.0-windows\qp.log"
+HERE = os.path.dirname(os.path.abspath(__file__))
+_DEFAULT_EXE = os.path.join(HERE, "..", "publish", "QuickPeek.exe")
+EXE = os.environ.get("QP_EXE") or _DEFAULT_EXE
+LOG = os.environ.get("QP_LOG") or os.path.join(os.path.dirname(_DEFAULT_EXE), "qp.log")
 ENV = dict(os.environ)
-ENV["DOTNET_ROOT"] = r"C:\Users\Lianfa\.dotnet"
+ENV["DOTNET_ROOT"] = os.environ.get("DOTNET_ROOT") or os.path.expanduser(r"~\.dotnet")
 
 # 上一轮进程刚退出时剪贴板可能还被短暂持有，给 OpenClipboard 加重试，
 # 免得把"测试脚本抢不到剪贴板"误报成产品问题

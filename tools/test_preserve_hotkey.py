@@ -19,7 +19,8 @@ try:
 except Exception:
     pass
 
-LOG = os.environ.get("QP_LOG") or r"D:\workfile\git\QuickPeek\bin\Debug\net8.0-windows\qp.log"
+HERE = os.path.dirname(os.path.abspath(__file__))
+LOG = os.environ.get("QP_LOG") or os.path.join(HERE, "..", "publish", "qp.log")
 
 _orig = cb.OpenClipboard
 
