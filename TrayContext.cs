@@ -458,11 +458,26 @@ internal sealed class TrayContext : ApplicationContext
 
     private async Task ReplaceSelectionAsync(string content, string original)
     {
-        ClipboardHelper.SetText(content);
-        await Task.Delay(120);
-        Input.SendCombo("Ctrl+V");
-        await Task.Delay(400);
-        if (!string.IsNullOrEmpty(original)) ClipboardHelper.SetText(original);
+        // "替换选区"要借剪贴板做中转，但用户原本的剪贴板可能是图片/文件，
+        // 不能因为一次替换就把它变成文本。先存全格式快照，完事原样写回。
+        var backup = ClipboardSnapshot.Capture();
+        try
+        {
+            ClipboardHelper.SetText(content);
+            await Task.Delay(120);
+            Input.SendCombo("Ctrl+V");
+            await Task.Delay(400);
+
+            if (backup == null || !backup.Restore())
+            {
+                // 快照拿不到（剪贴板被占用）就退回老做法：至少别把选区文本丢了
+                if (!string.IsNullOrEmpty(original)) ClipboardHelper.SetText(original);
+            }
+        }
+        finally
+        {
+            backup?.Dispose();
+        }
         Toast.Show("✓ 已替换选中文本");
     }
 

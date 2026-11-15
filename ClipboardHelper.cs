@@ -24,6 +24,11 @@ internal static class ClipboardHelper
         return "";
     }
 
+    /// <summary>
+    /// 写文本。注意：传空串会走 <see cref="Clipboard.Clear"/>，那是**清掉所有格式**，
+    /// 图片、正在复制的文件、富文本会一起消失。抓取流程已经不再清空剪贴板
+    /// （改用 <see cref="ClipboardSnapshot"/> 做全格式备份），别再把这条路加回来。
+    /// </summary>
     public static bool SetText(string text)
     {
         for (int i = 0; i < 10; i++)

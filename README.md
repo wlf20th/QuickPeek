@@ -35,7 +35,7 @@ publish\QuickPeek.exe                        # 自包含单文件，双击即用
 | 配置 | `settings.json` | 同结构同文件名，两个版本可互换 |
 | 日志 | `qp.log` | 同名同目录 |
 
-## 过程中发现并修掉的五个真问题
+## 过程中发现并修掉的几个真问题
 
 1. **Alt 还按着就发 Ctrl+C** —— 热键触发的瞬间用户手指没松，注入的 `Ctrl+C` 会被目标程序理解成 `Ctrl+Alt+C`，
    复制直接失效。现在先轮询 `GetAsyncKeyState` 等修饰键物理松开，再清一遍残留，最后才发复制键。
@@ -54,7 +54,9 @@ publish\QuickPeek.exe                        # 自包含单文件，双击即用
 5. **抓取偶尔卡到十几秒** —— 剪贴板被别的程序占住时，单次系统调用能内部阻塞数秒，
    叠加 10 次重试会放大成 11s+，期间所有新划词都被 `_capturing` 挡掉。
    现在：整体 4s 上限，超时放弃本次（后台线程自行结束）；期间来的新划词会排队，等当前这次结束后自动补抓一次。
-   慢于 1.2s 会在日志里打出各阶段耗时（读取备份/清空/发键/等剪贴板/恢复），便于定位是谁在堵。
+   慢于 1.2s 会在日志里打出各阶段耗时（备份剪贴板/发键/等剪贴板/恢复剪贴板），便于定位是谁在堵。
+6. **划一次词把用户的图片/文件弄没了** —— 备份只存文本，却用 `Clipboard.Clear()` 清掉全部格式，
+   还原那一步又因为备份是空串跳过。现在改成全格式快照，并且不再清空剪贴板（见前面专门一节）。
 
 ## 操作条定位
 
@@ -216,6 +218,52 @@ Java 写的终端在响应剪贴板请求时可能慢上半秒以上，直接轮
 验证脚本 `tools/test_autocopy.py`：拖选过程中人为往剪贴板写一段标记文本，观察日志是否出现
 `应用已自动复制(N 字)，未发送任何按键`，并确认剪贴板内容没有被清空。
 
+## 剪贴板备份：图片、文件、富文本都要原样还回去
+
+老流程是"备份文本 → `Clipboard.Clear()` → 发复制键 → 只把文本写回去"。问题在于
+`Clipboard.Clear()` 清的是**所有格式**，而备份只存了文本：
+
+- 复制了一个文件/一张截图/一段 HTML 富文本，然后随手划个词 → 原内容在 `Clear()` 那一步就没了；
+- 还原时判断是 `if (backup != "")`，备份为空串就直接跳过，连写回都没有；
+- 实测：剪贴板里只放 `HTML Format`，在记事本空白处拖 40px（无选区），结束后只剩
+  `DataObject` / `Ole Private Data` 两个空壳。
+
+现在拆成两处改动：
+
+**1. 备份换成全格式快照（`ClipboardSnapshot`）**
+
+用 Win32 枚举 `EnumClipboardFormats` 并逐个深拷贝，不再依赖 `GetText`：
+
+| 格式类型 | 处理方式 |
+|---|---|
+| 绝大多数（`CF_TEXT`/`CF_UNICODETEXT`/`CF_DIB`/`CF_DIBV5`/`CF_HDROP`/`CF_LOCALE`/`HTML Format`/`Rich Text Format`/`PNG`…） | 都是 HGLOBAL，`GlobalSize` + 整块 `RtlMoveMemory` 复制 |
+| `CF_BITMAP` / `CF_PALETTE` | GDI 句柄，`CopyImage` / `CreatePalette` 克隆 |
+| `CF_METAFILEPICT` / `CF_ENHMETAFILE` | 结构体里还挂着 `HMETAFILE`，连内部句柄一起 `CopyMetaFile` / `CopyEnhMetaFile` |
+| `CF_OWNERDISPLAY`、`CF_DSP*`、`CF_GDIOBJ*`、`CF_PRIVATEFIRST..LAST` | 合成/私有格式，数据由原窗口自己渲染，跨进程本来就克隆不了，跳过并记日志 |
+| `DataObject` / `Ole Private Data` | OLE 内部结构，跨进程写回只会让别的程序拿到野指针，跳过 |
+
+`SetClipboardData` 成功后句柄归系统所有，代码里立刻把引用置 0，避免二次释放；
+还原失败（被别的程序抢走）的项则自己 `GlobalFree` / `DeleteObject`，不泄漏。
+
+**2. 不再清空剪贴板，"复制有没有落地"改看序列号**
+
+发键前记下 `GetClipboardSequenceNumber()`，只有应用真的写过剪贴板它才会变。带来两个好处：
+
+- 超时放弃时用户剪贴板**一动都没动过**，连还原都不需要；
+- 但反过来，超时后"再看一眼剪贴板"这个兜底必须先确认序列号变过 —— 否则读到的是
+  用户原本就有的内容（上一段文本、图片的伴生文本），会被当成选区弹出去。
+
+还原只在"序列号确实变过"时执行：抓取成功（把选区文本换回原内容），或复制了非文本内容
+（读不出文本）。空快照就是原本空剪贴板，`EmptyClipboard` 一下即完成还原。
+
+**验证**（两个脚本都是真机跑）：
+
+- `tools/test_snapshot.py` 调 `QuickPeek.exe --snaptest` 做自检：纯文本 / 文件 / 图片
+  （`CF_DIB`+`CF_BITMAP`+`CF_DIBV5` 三格式）/ HTML / RTF / 文本+HTML 混合，**6 项全部格式与内容一致**；
+- `tools/test_preserve_hotkey.py` 走真实抓取链路：剪贴板里放文件、图片、HTML，各按一次 Alt+Q
+  （日志 `抓取成功: 35 字, 耗时 15x ms`，是完整的"备份→发键→还原"），结束后格式和内容原样；
+- 无选区场景序列号 `894 → 894`，剪贴板完全没被碰过。
+
 ## 取舍（说实话的部分）
 
 - **体积**：1.3 MB → 66 MB。自包含单文件把 .NET 运行时打进去了，WinForms 不支持裁剪（`NETSDK1175`），
@@ -249,6 +297,7 @@ Config.cs             Log.cs              settings.json 读写、日志
 Native.cs             Input.cs            P/Invoke、组合键解析与按键注入
 HotkeyManager.cs      MouseWatcher.cs     全局热键、全局鼠标钩子
 ClipboardHelper.cs    SelectionGrabber.cs 剪贴板重试、划词抓取（独立 STA 线程）
+ClipboardSnapshot.cs                      剪贴板全格式快照（图片/文件/富文本原样还原）
 SecretStore.cs                            API Key 的 DPAPI 加解密
 SelectionProbe.cs                         UIA 探针：终端到底有没有选中文字
 LlmClient.cs                              /chat/completions 客户端
@@ -272,6 +321,8 @@ tools/                                    图标生成 + 自动化测试脚本�
   浏览器/Electron（Chrome、Typora 一类）没有跑到干净的验证环境，机制相同但未实测
 - 焦点落在右键菜单/输入法候选框上时探针会判"未知"，退回老路径（多等一轮复制超时）——
   这是有意的保守，不能拿菜单的"选区"当用户选区
-- 抓取超时被放弃后，那个后台线程仍会跑完并恢复剪贴板；若紧接着又做了一次抓取，两者可能互相覆盖剪贴板
+- 抓取超时被放弃后，那个后台线程仍会跑完并按需还原剪贴板；若紧接着又做了一次抓取，两者可能互相覆盖剪贴板
   （概率低，且最终内容一般是用户原本的剪贴板）
+- 抓取等待期间（探针 Unknown 时最长约 2.9s）如果用户自己复制了别的内容，收尾的还原会把那次复制覆盖掉。
+  想彻底避免得记住"这次复制之后"的序列号，但那又和应用延迟渲染的时序纠缠在一起，暂时没做
 - 全局鼠标钩子仍装在 UI 线程，若将来 UI 线程出现长阻塞，钩子还会被拖住；彻底方案是把钩子放到独立消息循环线程

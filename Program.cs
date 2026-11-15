@@ -32,6 +32,28 @@ internal static class Program
             return;
         }
 
+        // 诊断用：验证剪贴板快照能否完整克隆并还原（图片、文件、富文本都能测）
+        // 用法：先在剪贴板里放好内容，再执行 QuickPeek.exe --snaptest
+        if (argv.Length >= 1 && argv[0] is "--snaptest" or "-snaptest")
+        {
+            var snap = ClipboardSnapshot.Capture();
+            if (snap == null)
+            {
+                Log.Write("快照自检: 剪贴板打不开");
+                return;
+            }
+            Log.Write($"快照自检: 抓到 {snap.Count} 项 [{snap.Summary}]" +
+                      (snap.Skipped.Count > 0 ? $" 跳过[{string.Join(",", snap.Skipped)}]" : ""));
+
+            // 故意把剪贴板毁掉，模拟"抓取时原内容已被清空"的最坏情况
+            ClipboardHelper.SetText("SNAPTEST-WIPED");
+
+            bool ok = snap.Restore();
+            Log.Write($"快照自检: 还原={(ok ? "成功" : "失败")}");
+            snap.Dispose();
+            return;
+        }
+
         // 单实例：已有进程就让它把托盘菜单弹出来，比甩一个“已在运行”的对话框顺手
         using var mutex = new Mutex(true, @"Local\QuickPeek_DotNet_SingleInstance", out bool created);
         if (!created)

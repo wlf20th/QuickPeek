@@ -4,7 +4,7 @@ using System.Windows.Forms;
 
 namespace QuickPeek;
 
-public readonly record struct Selection(string Text, string ClipboardBackup);
+public readonly record struct Selection(string Text);
 
 /// <summary>
 /// 划词抓取：备份剪贴板 → 清空 → 发送复制快捷键 → 等待 → 还原。
@@ -121,7 +121,7 @@ internal static class SelectionGrabber
             if (auto.Length > 0)
             {
                 Log.Write($"抓取: 应用已自动复制({auto.Length} 字)，未发送任何按键");
-                return new Selection(Clamp(auto), auto);
+                return new Selection(Clamp(auto));
             }
         }
 
@@ -152,7 +152,7 @@ internal static class SelectionGrabber
             if (probe.State == SelState.Has && probe.Text.Length > 0)
             {
                 Log.Write($"抓取: 终端({proc})选区由 UIA 直接读取 {probe.Text.Length} 字，未发送任何按键");
-                return new Selection(Clamp(probe.Text), "");
+                return new Selection(Clamp(probe.Text));
             }
 
             // 探不出来（该终端没有 UIA 文本接口）：鼠标触发一律不冒险，
@@ -165,14 +165,47 @@ internal static class SelectionGrabber
             Log.Write($"抓取: 终端({proc})选区状态未知，热键触发，按老路子发一次复制键");
         }
 
-        var backup = ClipboardHelper.GetText();
-        Phase("读取备份");
-        if (!ClipboardHelper.SetText(""))
+        // ---- 备份剪贴板（全格式），并且**不清空** ----
+        // 老做法是"备份文本 → Clear() → 发复制键 → 只把文本写回去"：Clear() 会把图片、
+        // 正在复制的文件、富文本一起抹掉，而还原那一步因为备份是空串直接跳过，
+        // 于是"复制了一个文件/一张截图，再随手划个词"就永久丢了（README 缺陷 1）。
+        // 现在改两点：
+        //   1) 快照覆盖全部格式，图片/文件/HTML/RTF 都能原样写回；
+        //   2) 不再清空剪贴板，"复制有没有落地"改看序列号 —— 只有应用真的写过剪贴板，
+        //      序列号才会变。好处是超时放弃时用户剪贴板一动都没动过，连还原都不需要。
+        var backup = ClipboardSnapshot.Capture();
+        if (backup == null)
+        {
+            // 剪贴板被死占（重试多次仍打不开）：既没法备份、也没法可靠判断复制结果，
+            // 这时候发键只会白白改掉用户的剪贴板，直接放弃。
+            Log.Write("抓取: 剪贴板无法打开（被占用），本次放弃");
             return null;
-        Phase("清空剪贴板");
+        }
 
-        // 记住"已清空"这个状态对应的序列号，后面用它判断复制有没有落地
-        uint seqCleared = Native.GetClipboardSequenceNumber();
+        try
+        {
+            if (backup.Skipped.Count > 0)
+                Log.Write($"剪贴板快照: {backup.Summary}；跳过 {string.Join(",", backup.Skipped)}");
+
+            return CopyViaKeys(cfg, fromHotkey, proc, terminal, probe, backup, sw, Phase);
+        }
+        finally
+        {
+            // 已还原的项句柄归系统了（置 0），剩下的是没机会还原的，在这里释放
+            backup.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// 发复制键把选区送进剪贴板，读完文本后把快照还原回去。
+    /// 不清空剪贴板，靠序列号变化判断复制是否落地。
+    /// </summary>
+    private static Selection? CopyViaKeys(AppConfig cfg, bool fromHotkey, string proc, bool terminal,
+        ProbeResult probe, ClipboardSnapshot backup, System.Diagnostics.Stopwatch sw, Action<string> Phase)
+    {
+        // 记住发键前的序列号：只有它变了，才说明应用真的写过剪贴板
+        uint seqBefore = Native.GetClipboardSequenceNumber();
+        Phase("备份剪贴板");
 
         // 关键：热键触发时用户手还没松开。若此刻 Alt 仍按着，
         // 注入的 Ctrl+C 会被目标程序当作 Ctrl+Alt+C，复制直接失效。
@@ -198,7 +231,7 @@ internal static class SelectionGrabber
         if (passthrough)
         {
             // 绝不补发：第二次同样可能被透传成 Ctrl+C
-            got = ClipboardHelper.WaitForNewText(CopyTimeoutMs, seqCleared, out text);
+            got = ClipboardHelper.WaitForNewText(CopyTimeoutMs, seqBefore, out text);
             Phase("等待剪贴板(只有一次机会)");
         }
         else
@@ -210,7 +243,7 @@ internal static class SelectionGrabber
             int first = probe.State == SelState.Has ? 900 : 700;
             int second = probe.State == SelState.Has ? 900 : CopyTimeoutMs;
 
-            got = ClipboardHelper.WaitForNewText(first, seqCleared, out text);
+            got = ClipboardHelper.WaitForNewText(first, seqBefore, out text);
             Phase("等待剪贴板(第一次)");
             if (!got)
             {
@@ -224,26 +257,30 @@ internal static class SelectionGrabber
 
         if (!got)
         {
-            // 放弃之前再看一眼：Java 写的终端/SSH 客户端可能刚好在超时之后才渲染完，
-            // 这时剪贴板里其实已经有内容了。以前只把长度写进日志就把内容丢了，
-            // 表现就是"明明复制到了却不弹操作条"。
-            string late = ClipboardHelper.GetText().Trim(' ', '\t', '\r', '\n');
+            // 放弃之前再看一眼：Java 写的终端/SSH 客户端可能刚好在超时之后才渲染完。
+            // 但这次剪贴板没有被我们清空，所以必须先确认序列号确实变过 —— 否则读到的
+            // 是用户本来就有的内容（上一段文本、图片的伴生文本），会被当成选区弹出去。
+            uint seqNow = Native.GetClipboardSequenceNumber();
+            bool changed = seqNow != seqBefore;
+            string late = changed ? ClipboardHelper.GetText().Trim(' ', '\t', '\r', '\n') : "";
+
             Log.Write($"抓取: 等待剪贴板超时（前台进程={ForegroundProcessName()}，" +
-                      $"剪贴板长度={late.Length}，序列号 {seqCleared}→{Native.GetClipboardSequenceNumber()}，" +
-                      $"耗时 {sw.ElapsedMilliseconds}ms）");
+                      $"剪贴板{(changed ? "已变化" : "未变化")}，文本长度={late.Length}，" +
+                      $"序列号 {seqBefore}→{seqNow}，耗时 {sw.ElapsedMilliseconds}ms）");
 
             if (late.Length == 0)
             {
-                if (backup != "") ClipboardHelper.SetText(backup);
+                // 序列号没变 = 应用压根没动剪贴板，用户的东西原样在那，不用还原；
+                // 变了却读不出文本 = 应用复制的是非文本（图片等），得把快照写回去。
+                if (changed) RestoreClipboard(backup);
                 return null;
             }
 
             Log.Write($"抓取: 超时后拿到 {late.Length} 字，直接采用");
             text = late;
-            got = true;
         }
 
-        if (backup != "") ClipboardHelper.SetText(backup);
+        RestoreClipboard(backup);
         Phase("恢复剪贴板");
 
         text = text.Trim(' ', '\t', '\r', '\n');
@@ -256,7 +293,14 @@ internal static class SelectionGrabber
         text = Clamp(text);
 
         Log.Write($"抓取成功: {text.Length} 字, 耗时 {sw.ElapsedMilliseconds}ms");
-        return new Selection(text, backup);
+        return new Selection(text);
+    }
+
+    /// <summary>把快照写回剪贴板。还原失败不能静默 —— 那是用户真的丢东西。</summary>
+    private static void RestoreClipboard(ClipboardSnapshot backup)
+    {
+        if (!backup.Restore())
+            Log.Write("⚠️ 剪贴板还原失败，原内容（图片/文件/富文本）可能已丢失");
     }
 
     /// <summary>
